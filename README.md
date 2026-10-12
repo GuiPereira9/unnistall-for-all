@@ -1,7 +1,7 @@
 # unnistall-for-all
-# 🗑️ Linux Uninstaller Toy
+# 🗑️ Linux Uninstaller
 
-O **Linux Uninstaller Toy** é um script Bash simples, interativo e visual que atua como um desinstalador universal para distribuições Linux. Inspirado na leveza e diversão dos "Linux toys" de terminal, ele utiliza o `zenity` para fornecer uma interface gráfica amigável, unificando a remoção de aplicativos de diversas origens em um único lugar.
+O **Linux Uninstaller é um script Bash simples, interativo e visual que atua como um desinstalador universal para distribuições Linux. Inspirado na leveza e diversão dos "Linux toys" de terminal, ele utiliza o `zenity` para fornecer uma interface gráfica amigável, unificando a remoção de aplicativos de diversas origens em um único lugar.
 
 ## ✨ Funcionalidades
 
