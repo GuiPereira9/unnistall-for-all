@@ -25,10 +25,3 @@ Para que o script funcione corretamente, você precisará ter instalado na sua d
 - `pkexec` (Polkit - Responsável por pedir a senha de administrador graficamente).
 
 *Em muitas distribuições com interface gráfica (GNOME, KDE, XFCE), esses pacotes já vêm instalados por padrão.*
-
-## 🚀 Como usar
-
-1. Clone este repositório:
-   ```bash
-   git clone [https://github.com/SEU_USUARIO/linux-uninstaller-toy.git](https://github.com/SEU_USUARIO/linux-uninstaller-toy.git)
-   cd linux-uninstaller-toy
