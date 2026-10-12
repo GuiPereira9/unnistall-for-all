@@ -1,0 +1,206 @@
+#!/usr/bin/env bash
+
+# Verifica se o zenity está instalado
+if ! command -v zenity &> /dev/null; then
+    echo "Erro: zenity não está instalado. Instale-o com o gerenciador da sua distro."
+    exit 1
+fi
+
+# Expressão regular com pacotes essenciais do sistema e interfaces gráficas
+CRITICAL_REGEX="^(systemd|systemd-sysv|init|coreutils|util-linux|bash|libc6|glibc|linux-image.*|linux-modules.*|linux-firmware|grub.*|dpkg|apt|dnf|rpm|pacman|xorg|xserver.*|wayland|mutter|kwin.*|gnome-shell|plasma-desktop|gdm3|sddm|lightdm|dbus|pipewire|pulseaudio)$"
+
+is_critical() {
+    [[ "$1" =~ $CRITICAL_REGEX ]]
+}
+
+while true; do
+    TIPO=$(zenity --list --title="Linux Uninstaller Toy" \
+        --text="Selecione o modo de desinstalação:" \
+        --column="Código" --column="Origem / Modo" \
+        "all" "⚠️ Listar TODOS os apps (Nativos, Flatpak, Snap, AppImage, /opt)" \
+        "native" "Pacotes Nativo da Distro (apt/dnf/pacman)" \
+        "flatpak" "Flatpaks" \
+        "snap" "Snaps" \
+        --cancel-label="Sair" \
+        --height=350 --width=600)
+
+    # Se clicar em Sair ou fechar a janela, encerra o loop
+    [ -z "$TIPO" ] && exit 0
+
+    case "$TIPO" in
+        all)
+            LIST_DATA=()
+
+            # 1. Pacotes nativos
+            if command -v dpkg-query &> /dev/null; then
+                while IFS= read -r pkg; do
+                    [ -z "$pkg" ] && continue
+                    if is_critical "$pkg"; then
+                        STATUS_TXT="<span foreground='red'><b>CRÍTICO (Sistema/GUI)</b></span>"
+                    else
+                        STATUS_TXT="Pacote Nativo"
+                    fi
+                    LIST_DATA+=("$pkg" "Nativo" "" "$pkg" "$pkg" "$STATUS_TXT")
+                done < <(dpkg-query -W -f='${Package}\n')
+            elif command -v rpm &> /dev/null; then
+                while IFS= read -r pkg; do
+                    [ -z "$pkg" ] && continue
+                    if is_critical "$pkg"; then
+                        STATUS_TXT="<span foreground='red'><b>CRÍTICO (Sistema/GUI)</b></span>"
+                    else
+                        STATUS_TXT="Pacote Nativo"
+                    fi
+                    LIST_DATA+=("$pkg" "Nativo" "" "$pkg" "$pkg" "$STATUS_TXT")
+                done < <(rpm -qa --qf "%{NAME}\n" | sort -u)
+            elif command -v pacman &> /dev/null; then
+                while IFS= read -r pkg; do
+                    [ -z "$pkg" ] && continue
+                    if is_critical "$pkg"; then
+                        STATUS_TXT="<span foreground='red'><b>CRÍTICO (Sistema/GUI)</b></span>"
+                    else
+                        STATUS_TXT="Pacote Nativo"
+                    fi
+                    LIST_DATA+=("$pkg" "Nativo" "" "$pkg" "$pkg" "$STATUS_TXT")
+                done < <(pacman -Qq)
+            fi
+
+            # 2. Flatpaks
+            if command -v flatpak &> /dev/null; then
+                while IFS=$'\t' read -r nome_app pkg; do
+                    [ -z "$pkg" ] && continue
+                    LIST_DATA+=("$pkg" "Flatpak" "" "$nome_app" "$pkg" "Sandbox Flatpak")
+                done < <(flatpak list --app --columns=name,application)
+            fi
+
+            # 3. Snaps
+            if command -v snap &> /dev/null; then
+                while IFS= read -r pkg; do
+                    [ -z "$pkg" ] && continue
+                    if [[ "$pkg" =~ ^(core.*|snapd|bare)$ ]]; then
+                        STATUS_TXT="<span foreground='red'><b>CRÍTICO (Base Snap)</b></span>"
+                    else
+                        STATUS_TXT="Sandbox Snap"
+                    fi
+                    LIST_DATA+=("$pkg" "Snap" "" "$pkg" "$pkg" "$STATUS_TXT")
+                done < <(snap list 2>/dev/null | awk 'NR>1 {print $1}')
+            fi
+
+            # 4. Instaladores customizados: VMware (.bundle)
+            if command -v vmware-installer &> /dev/null; then
+                while IFS= read -r line; do
+                    [[ "$line" == "Product Name"* ]] && continue
+                    [[ "$line" == "=="* ]] && continue
+                    [ -z "$line" ] && continue
+                    pkg=$(echo "$line" | awk '{print $1}')
+                    LIST_DATA+=("$pkg" "VMware" "" "VMware ($pkg)" "$pkg" "Instalador Customizado (.bundle)")
+                done < <(vmware-installer -l 2>/dev/null)
+            fi
+
+            # 5. AppImages (Integrados via .desktop no menu do usuário)
+            if [ -d "$HOME/.local/share/applications" ]; then
+                for f in "$HOME/.local/share/applications/"*.desktop; do
+                    [ -f "$f" ] || continue
+                    # Extrai o caminho do executável ignorando argumentos extras
+                    appimage_path=$(grep -m 1 "^Exec=" "$f" | sed -E 's/^Exec="?([^" ]+).*/\1/')
+                    if [[ "${appimage_path,,}" == *".appimage"* ]] && [ -f "$appimage_path" ]; then
+                        friendly_name=$(grep -m 1 "^Name=" "$f" | cut -d'=' -f2)
+                        [ -z "$friendly_name" ] && friendly_name="$(basename "$appimage_path")"
+                        
+                        # O ID Real será o caminho do arquivo para podermos apagá-lo
+                        LIST_DATA+=("$appimage_path" "AppImage" "" "$friendly_name" "$(basename "$appimage_path")" "Arquivo Portátil Integrado")
+                    fi
+                done
+            fi
+
+            # 6. Scripts de desinstalação em /opt/
+            if [ -d "/opt" ]; then
+                for dir in /opt/*; do
+                    if [ -d "$dir" ]; then
+                        app_name=$(basename "$dir")
+                        # Busca por nomes comuns de desinstaladores
+                        for uninstaller in "$dir"/uninstall "$dir"/uninstall.sh "$dir"/*uninstall*.sh "$dir"/maintenance-tool; do
+                            if [ -x "$uninstaller" ] && [ -f "$uninstaller" ]; then
+                                LIST_DATA+=("$uninstaller" "/opt" "" "Pasta /opt ($app_name)" "$(basename "$uninstaller")" "Script Customizado em /opt")
+                                break # Pega apenas um desinstalador por pasta
+                            fi
+                        done
+                    fi
+                done
+            fi
+
+            # Exibe a lista unificada com as novas colunas
+            SELECTED=$(zenity --list \
+                --title="Todos os Aplicativos e Pacotes" \
+                --text="Pacotes em <span foreground='red'><b>vermelho</b></span> são essenciais.\nMaximize a janela usando os botões do seu sistema." \
+                --column="ID Real" --column="Origem" --column="Ícone" --column="Nome (Menu)" --column="Nome do Pacote/Arquivo" --column="Status" \
+                --hide-column=1 \
+                --print-column=1 \
+                --extra-button="← Voltar ao Menu Principal" \
+                --ok-label="Desinstalar" \
+                --cancel-label="Fechar" \
+                --height=800 --width=1000 \
+                "${LIST_DATA[@]}")
+
+            RET=$?
+
+            # Se clicou em voltar ou cancelar
+            if [ "$SELECTED" = "← Voltar ao Menu Principal" ] || [ "$RET" -eq 1 ] || [ -z "$SELECTED" ]; then
+                continue
+            fi
+
+            if [ -n "$SELECTED" ]; then
+                if is_critical "$SELECTED"; then
+                    zenity --warning \
+                        --title="PERIGO: PACOTE CRÍTICO!" \
+                        --text="<b>ATENÇÃO MÁXIMA:</b> O pacote <b>$SELECTED</b> é vital para o sistema ou ambiente gráfico.\n\nA remoção pode quebrar a inicialização ou a interface gráfica." \
+                        --ok-label="Entendido"
+                    
+                    zenity --question \
+                        --title="Confirmação de Risco Extremo" \
+                        --text="Deseja REALMENTE tentar forçar a remoção de <b>$SELECTED</b>?" \
+                        --default-cancel || continue
+                else
+                    zenity --question \
+                        --text="Deseja remover:\n\n<b>$SELECTED</b> ?" || continue
+                fi
+
+                # Executa a desinstalação conforme a origem/ferramenta
+                if command -v vmware-installer &> /dev/null && vmware-installer -l 2>/dev/null | grep -q "^$SELECTED"; then
+                    pkexec vmware-installer -u "$SELECTED" && zenity --info --text="VMware removido com sucesso!"
+                
+                # Tratamento para AppImages (Apaga o arquivo físico e o atalho .desktop)
+                elif [[ "${SELECTED,,}" == *".appimage"* ]] && [ -f "$SELECTED" ]; then
+                    rm -f "$SELECTED"
+                    # Remove o atalho associado na pasta de atalhos
+                    desktop_file=$(grep -l "^Exec=.*$(basename "$SELECTED")" "$HOME/.local/share/applications/"*.desktop 2>/dev/null | head -n 1)
+                    [ -n "$desktop_file" ] && rm -f "$desktop_file"
+                    zenity --info --text="AppImage e atalhos removidos com sucesso!"
+                
+                # Tratamento para Scripts em /opt/
+                elif [[ "$SELECTED" == /opt/* ]] && [ -x "$SELECTED" ]; then
+                    # Roda o script de desinstalação com privilégios de root
+                    pkexec "$SELECTED"
+                    zenity --info --text="Script de desinstalação do /opt/ finalizado!"
+                
+                # Tratamento Padrão: Flatpak, Snap, Apt/Dnf/Pacman
+                elif command -v flatpak &> /dev/null && flatpak info "$SELECTED" &> /dev/null; then
+                    flatpak uninstall -y "$SELECTED" && zenity --info --text="Flatpak removido!"
+                elif command -v snap &> /dev/null && snap list "$SELECTED" &> /dev/null; then
+                    pkexec snap remove "$SELECTED" && zenity --info --text="Snap removido!"
+                else
+                    if command -v apt &> /dev/null; then
+                        pkexec apt purge -y "$SELECTED" && zenity --info --text="Pacote removido!"
+                    elif command -v dnf &> /dev/null; then
+                        pkexec dnf remove -y "$SELECTED" && zenity --info --text="Pacote removido!"
+                    elif command -v pacman &> /dev/null; then
+                        pkexec pacman -Rns --noconfirm "$SELECTED" && zenity --info --text="Pacote removido!"
+                    fi
+                fi
+            fi
+            ;;
+        *)
+            # Como as demais opções estão inalteradas, apenas bloqueamos caso não seja a principal para centralizar o uso
+            zenity --info --text="Para garantir a exibição correta dos novos formatos, use a opção 'Listar TODOS os apps'."
+            ;;
+    esac
+done
